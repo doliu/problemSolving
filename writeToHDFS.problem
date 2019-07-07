@@ -1,0 +1,59 @@
+Firstly, I met a NPE problem when writing scala application code using Hadoop client API to HDFS. The exception looks as below:
+
+Caused by: java.lang.NullPointerException
+  at org.apache.hadoop.crypto.CryptoInputStream.<init>(CryptoInputStream.java:133)
+  ...
+  
+The Exception looks weird to me since my InputStream is not cryptographic. Firstly, I thought it might be the codec problem. 
+But when I changed several types of codec, including lzo, snappy, or even without codec, the exception still exists. So I know 
+that it's a wrong direction. I did ask a few friends to help, they had no clue neither but provided me a link:
+https://issues.apache.org/jira/browse/HADOOP-10662
+
+This is interesting since the assignee is accidentally the architect of our team. So I turned to him for help. He looked at the 
+exception and said there is no way for my code to call CryptoInputStream. It might be a configuration problem of my hadoop 
+client instance.
+
+But my client configuration is real simple as below:
+
+    conf.addResource(new Path(hadoopCoreConfig.toURI))
+    conf.addResource(new Path(hadoopHdfsConfig.toURI))
+    conf.set(PARAM_FS_HDFS_IMPL, classOf[DistributedFileSystem].getName)
+    conf.set(PARAM_FS_FILE_IMPL, classOf[LocalFileSystem].getName)
+    conf.set(PARAM_VIEWFS_FILE_IMPL, classOf[ViewFileSystem].getName)
+    
+I checked that the configurations are all correct. Then I got stucked. 
+
+Then I thought over and over again to check anything related, like if there is any environment problem or if the usage of the 
+client is not correct, etc. But not any improvements. 
+
+Suddenly, I realized that it might relate to maven dependency problem. So I checked my pom and found below dependency is not 
+included. 
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-hdfs-client</artifactId>
+            <version>3.2.0</version>
+        </dependency>
+
+The exception is gone after adding the dependency. But there comes another exception: 
+java.lang.NoClassDefFoundError: org/apache/hadoop/tracing/SpanReceiverHost
+
+I searched that the class exists in version 2.7.3, so I changed the version to 2.7.3. But it comes another exception:
+java.lang.NoClassDefFoundError: org/apache/hadoop/tracing/TraceAdminProtocol
+
+That means both versions won't work because of some class missing. I also checked that there's no such kind of version that 
+both contain SpanReceiverHost class and TraceAdminProtocol class. 
+
+This time, it went more smoothly to solve the problem. I checked that when the version is 3.2.0, the exception was thrown by 
+DFSClient.java. The class only exists in 2.7.3. That means 2.7.3 version is also somehow included in my dependency.
+
+I checked the dependency analyzer plugin and found there is a common jar built by another component that includes the v2.7.3
+dependency. So the solution is to just add below exclusion when having common jar as a dependency.
+
+            <exclusions>
+                <exclusion>
+                    <artifactId>hadoop-client</artifactId>
+                    <groupId>org.apache.hadoop</groupId>
+                </exclusion>
+            </exclusions>
+            
+ Bravo. 
